@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  telegram-bot:
+    build: .
+    container_name: telegram-task-bot
+    restart: unless-stopped
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - USER_1_ID=${USER_1_ID}
+      - USER_1_NAME=${USER_1_NAME}
+      - USER_2_ID=${USER_2_ID}
+      - USER_2_NAME=${USER_2_NAME}
+      - USER_3_ID=${USER_3_ID}
+      - USER_3_NAME=${USER_3_NAME}
+      - USER_4_ID=${USER_4_ID}
+      - USER_4_NAME=${USER_4_NAME}
+      - USER_5_ID=${USER_5_ID}
+      - USER_5_NAME=${USER_5_NAME}
+    volumes:
+      - ./data:/app/data
+      - ./tasks_data.json:/app/tasks_data.json
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
