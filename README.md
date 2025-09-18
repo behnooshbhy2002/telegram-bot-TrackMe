@@ -21,8 +21,8 @@ A Persian Telegram bot for daily task management and tracking.
 
 1. Clone the repository:
 ```bash
-git clone <your-repo-url>
-cd telegram-bot
+git clone https://github.com/behnooshbhy2002/telegram-bot-TrackMe.git
+cd telegram-bot-TrackMe
 ```
 
 2. Create virtual environment:
@@ -39,7 +39,7 @@ pip install -r requirements.txt
 4. Set up environment variables:
 ```bash
 cp .env.example .env
-# Edit .env file and add your BOT_TOKEN
+# Edit .env file and add your BOT_TOKEN and users_telegram_id
 ```
 
 5. Run the bot:
