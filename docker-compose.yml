@@ -3,25 +3,35 @@ version: '3.8'
 services:
   telegram-bot:
     build: .
-    container_name: telegram-task-bot
+    container_name: task-manager-bot
     restart: unless-stopped
+    volumes:
+      - ./data:/app/data
     environment:
+      # Bot Token - Get from @BotFather on Telegram
       - BOT_TOKEN=${BOT_TOKEN}
+      
+      # Users configuration - Add your users here
+      # Get chat IDs by messaging the bot and checking logs
       - USER_1_ID=${USER_1_ID}
       - USER_1_NAME=${USER_1_NAME}
       - USER_2_ID=${USER_2_ID}
       - USER_2_NAME=${USER_2_NAME}
-      - USER_3_ID=${USER_3_ID}
-      - USER_3_NAME=${USER_3_NAME}
-      - USER_4_ID=${USER_4_ID}
-      - USER_4_NAME=${USER_4_NAME}
-      - USER_5_ID=${USER_5_ID}
-      - USER_5_NAME=${USER_5_NAME}
-    volumes:
-      - ./data:/app/data
-      - ./tasks_data.json:/app/tasks_data.json
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+      # Add more users as needed:
+      # - USER_3_ID=${USER_3_ID}
+      # - USER_3_NAME=${USER_3_NAME}
+    
+    # Optional: For debugging
+    # ports:
+    #   - "8080:8080"
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('https://api.telegram.org/bot${BOT_TOKEN}/getMe')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  bot_data:
+    driver: local
