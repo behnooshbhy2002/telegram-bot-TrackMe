@@ -3,35 +3,30 @@ version: '3.8'
 services:
   telegram-bot:
     build: .
-    container_name: task-manager-bot
+    container_name: telegram-task-bot
     restart: unless-stopped
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - USER1_ID=${USER1_ID}
+      - USER1_NAME=${USER1_NAME}
+      - USER2_ID=${USER2_ID}
+      - USER2_NAME=${USER2_NAME}
     volumes:
       - ./data:/app/data
-    environment:
-      # Bot Token - Get from @BotFather on Telegram
-      - BOT_TOKEN=${BOT_TOKEN}
-      
-      # Users configuration - Add your users here
-      # Get chat IDs by messaging the bot and checking logs
-      - USER_1_ID=${USER_1_ID}
-      - USER_1_NAME=${USER_1_NAME}
-      - USER_2_ID=${USER_2_ID}
-      - USER_2_NAME=${USER_2_NAME}
-      # Add more users as needed:
-      # - USER_3_ID=${USER_3_ID}
-      # - USER_3_NAME=${USER_3_NAME}
-    
-    # Optional: For debugging
-    # ports:
-    #   - "8080:8080"
-    
-    # Health check
+      - ./logs:/app/logs
+    networks:
+      - telegram-bot-network
+    # Optional: Add health check
     healthcheck:
-      test: ["CMD", "python", "-c", "import requests; requests.get('https://api.telegram.org/bot${BOT_TOKEN}/getMe')"]
+      test: ["CMD", "python", "-c", "import sqlite3; sqlite3.connect('/app/data/tasks.db').execute('SELECT 1')"]
       interval: 30s
       timeout: 10s
       retries: 3
 
+networks:
+  telegram-bot-network:
+    driver: bridge
+
 volumes:
-  bot_data:
+  bot-data:
     driver: local

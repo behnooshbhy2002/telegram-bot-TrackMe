@@ -14,7 +14,11 @@ import pytz
 # Configure logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.INFO,
+    handlers=[
+        logging.FileHandler('/app/logs/bot.log'),
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -24,35 +28,38 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 # Sleep reminder URL
 SLEEP_REMINDER_URL = "https://shealth.samsung.com/deepLink?sc_id=tracker.medication&action=view&destination=home.sleep"
 
-# Load users from environment variables
-def load_users():
+# Configure users from environment variables
+def load_users_from_env():
     users = {}
     i = 1
     while True:
-        user_id = os.getenv(f"USER_{i}_ID")
-        user_name = os.getenv(f"USER_{i}_NAME")
+        user_id_key = f"USER{i}_ID"
+        user_name_key = f"USER{i}_NAME"
         
-        if not user_id or not user_name:
+        user_id = os.getenv(user_id_key)
+        user_name = os.getenv(user_name_key)
+        
+        if user_id and user_name:
+            try:
+                users[int(user_id)] = user_name
+                i += 1
+            except ValueError:
+                logger.error(f"Invalid user ID format for {user_id_key}: {user_id}")
+                break
+        else:
             break
-            
-        try:
-            users[int(user_id)] = user_name
-        except ValueError:
-            logger.error(f"Invalid user ID format for USER_{i}_ID: {user_id}")
-        
-        i += 1
-    
-    if not users:
-        logger.warning("No users configured! Please set USER_1_ID, USER_1_NAME, etc. in environment variables")
     
     return users
 
-USERS = load_users()
+USERS = load_users_from_env()
 
-# Database setup
-DB_FILE = "tasks.db"
+# Database setup with persistent path
+DB_FILE = "/app/data/tasks.db"
 
 def init_database():
+    # Ensure data directory exists
+    os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
+    
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     
@@ -432,15 +439,19 @@ async def set_bot_commands(application):
     await application.bot.set_my_commands(commands)
 
 def main():
-    # Check if bot token is provided
     if not BOT_TOKEN:
-        logger.error("BOT_TOKEN environment variable is required!")
+        logger.error("Please set BOT_TOKEN environment variable!")
         return
     
     # Check if users are configured
     if not USERS:
-        logger.error("No users configured! Please set USER_1_ID, USER_1_NAME, etc.")
+        logger.error("No users configured! Please set USER1_ID, USER1_NAME, etc. environment variables")
         return
+
+    logger.info(f"Loaded {len(USERS)} users: {list(USERS.values())}")
+
+    # Ensure log directory exists
+    os.makedirs('/app/logs', exist_ok=True)
 
     # Initialize database
     init_database()
@@ -463,18 +474,20 @@ def main():
     # Set bot commands menu
     app.job_queue.run_once(set_bot_commands, when=1)
 
-    # Schedule reminders
+    # Schedule reminders with Iran timezone
+    iran_tz = pytz.timezone('Asia/Tehran')
+    
     # Daily task reminder at 9:00 AM Iran time
     app.job_queue.run_daily(
         send_daily_task_reminder,
-        time=time(hour=9, minute=0),
+        time=time(hour=9, minute=0, tzinfo=iran_tz),
         name="daily_task_reminder"
     )
     
-    # Sleep reminder at 10:00 AM Iran time
+    # Sleep reminder at 10:00 AM Iran time (you can change this time as needed)
     app.job_queue.run_daily(
         send_sleep_reminder,
-        time=time(hour=10, minute=0),
+        time=time(hour=10, minute=0, tzinfo=iran_tz),
         name="sleep_reminder"
     )
 
