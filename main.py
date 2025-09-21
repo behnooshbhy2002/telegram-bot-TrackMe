@@ -275,44 +275,132 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(welcome_message)
 
+# def parse_date_from_text(text):
+#     """Extract date from text in various formats"""
+#     # Remove /tasks command
+#     text = text.replace("/tasks", "").strip()
+    
+#     # Look for date patterns at the beginning or end
+#     date_patterns = [
+#         r'(\d{4}-\d{1,2}-\d{1,2})',  # YYYY-MM-DD or YYYY-M-D
+#         r'(\d{1,2}/\d{1,2}/\d{4})',  # DD/MM/YYYY or D/M/YYYY
+#         r'(\d{1,2}-\d{1,2}-\d{4})',  # DD-MM-YYYY or D-M-YYYY
+#     ]
+    
+#     for pattern in date_patterns:
+#         match = re.search(pattern, text)
+#         if match:
+#             date_str = match.group(1)
+#             # Convert different formats to YYYY-MM-DD
+#             if '/' in date_str:
+#                 parts = date_str.split('/')
+#                 if len(parts) == 3:
+#                     day, month, year = parts
+#                     date_str = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+#             elif '-' in date_str and not date_str.startswith('20'):  # DD-MM-YYYY format
+#                 parts = date_str.split('-')
+#                 if len(parts) == 3:
+#                     day, month, year = parts
+#                     date_str = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+            
+#             # Validate the date
+#             try:
+#                 datetime.strptime(date_str, "%Y-%m-%d")
+#                 # Remove the date from the original text
+#                 remaining_text = re.sub(pattern, '', text).strip()
+#                 return date_str, remaining_text
+#             except ValueError:
+#                 continue
+    
+#     return None, text
+
 def parse_date_from_text(text):
-    """Extract date from text in various formats"""
+    """Extract date from text in various formats (both Jalali and Gregorian)"""
     # Remove /tasks command
     text = text.replace("/tasks", "").strip()
     
     # Look for date patterns at the beginning or end
     date_patterns = [
-        r'(\d{4}-\d{1,2}-\d{1,2})',  # YYYY-MM-DD or YYYY-M-D
-        r'(\d{1,2}/\d{1,2}/\d{4})',  # DD/MM/YYYY or D/M/YYYY
-        r'(\d{1,2}-\d{1,2}-\d{4})',  # DD-MM-YYYY or D-M-YYYY
+        r'(\d{4}[/-]\d{1,2}[/-]\d{1,2})',  # YYYY-MM-DD or YYYY/MM/DD format
+        r'(\d{1,2}[/-]\d{1,2}[/-]\d{4})',  # DD/MM/YYYY or DD-MM-YYYY format
     ]
     
     for pattern in date_patterns:
         match = re.search(pattern, text)
         if match:
             date_str = match.group(1)
-            # Convert different formats to YYYY-MM-DD
+            
+            # Split by either / or -
             if '/' in date_str:
                 parts = date_str.split('/')
-                if len(parts) == 3:
-                    day, month, year = parts
-                    date_str = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
-            elif '-' in date_str and not date_str.startswith('20'):  # DD-MM-YYYY format
+                separator = '/'
+            else:
                 parts = date_str.split('-')
-                if len(parts) == 3:
-                    day, month, year = parts
-                    date_str = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+                separator = '-'
             
-            # Validate the date
-            try:
-                datetime.strptime(date_str, "%Y-%m-%d")
+            if len(parts) != 3:
+                continue
+                
+            # Try to determine if it's Jalali or Gregorian and convert accordingly
+            converted_date = convert_date_to_gregorian(parts, separator, date_str)
+            
+            if converted_date:
                 # Remove the date from the original text
                 remaining_text = re.sub(pattern, '', text).strip()
-                return date_str, remaining_text
-            except ValueError:
-                continue
+                return converted_date, remaining_text
     
     return None, text
+
+def convert_date_to_gregorian(parts, separator, original_date_str):
+    """Convert date parts to Gregorian YYYY-MM-DD format"""
+    try:
+        # Check if it's in YYYY-MM-DD or YYYY/MM/DD format
+        if len(parts[0]) == 4:  # First part is year
+            year, month, day = int(parts[0]), int(parts[1]), int(parts[2])
+            
+            # Check if it looks like Jalali (year >= 1300)
+            if year >= 1300:
+                # It's Jalali, convert to Gregorian
+                try:
+                    jalali_date = jdatetime.date(year, month, day)
+                    gregorian_date = jalali_date.togregorian()
+                    return gregorian_date.strftime("%Y-%m-%d")
+                except (ValueError, jdatetime.InvalidJalaliDate):
+                    return None
+            else:
+                # It's Gregorian, validate and format
+                try:
+                    gregorian_date = datetime(year, month, day).date()
+                    return gregorian_date.strftime("%Y-%m-%d")
+                except ValueError:
+                    return None
+        
+        # Check if it's in DD/MM/YYYY or DD-MM-YYYY format
+        elif len(parts[2]) == 4:  # Last part is year
+            day, month, year = int(parts[0]), int(parts[1]), int(parts[2])
+            
+            # Check if it looks like Jalali (year >= 1300)
+            if year >= 1300:
+                # It's Jalali, convert to Gregorian
+                try:
+                    jalali_date = jdatetime.date(year, month, day)
+                    gregorian_date = jalali_date.togregorian()
+                    return gregorian_date.strftime("%Y-%m-%d")
+                except (ValueError, jdatetime.InvalidJalaliDate):
+                    return None
+            else:
+                # It's Gregorian, validate and format
+                try:
+                    gregorian_date = datetime(year, month, day).date()
+                    return gregorian_date.strftime("%Y-%m-%d")
+                except ValueError:
+                    return None
+                    
+    except (ValueError, IndexError):
+        return None
+    
+    return None
+
 
 # Add tasks
 async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
