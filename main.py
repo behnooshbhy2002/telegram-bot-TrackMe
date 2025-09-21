@@ -92,40 +92,60 @@ def init_database():
 
 # Database operations
 def save_daily_tasks(user_id, date, tasks):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    
-    # Remove existing tasks for this user and date
-    cursor.execute('DELETE FROM tasks WHERE user_id = ? AND date = ?', (user_id, date))
-    
-    # Insert new tasks
-    for task in tasks:
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        
+        logger.info(f"Saving {len(tasks)} tasks for user {user_id} on {date}")
+        
+        # Remove existing tasks for this user and date
+        cursor.execute('DELETE FROM tasks WHERE user_id = ? AND date = ?', (user_id, date))
+        deleted_count = cursor.rowcount
+        logger.info(f"Deleted {deleted_count} existing tasks")
+        
+        # Insert new tasks
+        for i, task in enumerate(tasks):
+            if task.strip():  # Only insert non-empty tasks
+                cursor.execute(
+                    'INSERT INTO tasks (user_id, date, task_text, is_done) VALUES (?, ?, ?, 0)',
+                    (user_id, date, task.strip())
+                )
+                logger.info(f"Inserted task {i+1}: {task.strip()[:50]}...")
+        
+        # Update or insert daily entry
         cursor.execute(
-            'INSERT INTO tasks (user_id, date, task_text, is_done) VALUES (?, ?, ?, 0)',
-            (user_id, date, task)
+            'INSERT OR REPLACE INTO daily_entries (user_id, date, total_tasks, is_completed) VALUES (?, ?, ?, 0)',
+            (user_id, date, len([t for t in tasks if t.strip()]))
         )
-    
-    # Update or insert daily entry
-    cursor.execute(
-        'INSERT OR REPLACE INTO daily_entries (user_id, date, total_tasks, is_completed) VALUES (?, ?, ?, 0)',
-        (user_id, date, len(tasks))
-    )
-    
-    conn.commit()
-    conn.close()
+        
+        conn.commit()
+        conn.close()
+        
+        logger.info(f"Successfully saved {len(tasks)} tasks for user {user_id} on {date}")
+        
+    except Exception as e:
+        logger.error(f"Error saving daily tasks: {e}")
+        raise
 
 def get_tasks_by_date(user_id, date):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    
-    cursor.execute(
-        'SELECT id, task_text, is_done FROM tasks WHERE user_id = ? AND date = ? ORDER BY id',
-        (user_id, date)
-    )
-    
-    tasks = cursor.fetchall()
-    conn.close()
-    return tasks
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            'SELECT id, task_text, is_done FROM tasks WHERE user_id = ? AND date = ? ORDER BY id',
+            (user_id, date)
+        )
+        
+        tasks = cursor.fetchall()
+        conn.close()
+        
+        logger.info(f"Found {len(tasks)} tasks for user {user_id} on {date}")
+        return tasks
+        
+    except Exception as e:
+        logger.error(f"Error getting tasks by date: {e}")
+        return []
 
 def toggle_task_status(task_id):
     conn = sqlite3.connect(DB_FILE)
@@ -326,11 +346,19 @@ async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Save to database
     save_daily_tasks(user_id, target_date, task_list)
+    
+    # Send confirmation message first
+    await update.message.reply_text(f"✅ {len(task_list)} تسک برای تاریخ {target_date} ثبت شد.")
 
     # Notify partners about task entry
     await notify_task_entry(context, user_id, target_date, len(task_list))
 
-    await show_tasks_for_date(update, context, user_id, target_date)
+    # Show the tasks
+    try:
+        await show_tasks_for_date(update, context, user_id, target_date)
+    except Exception as e:
+        logger.error(f"Error showing tasks: {e}")
+        await update.message.reply_text("خطا در نمایش تسک‌ها. از دستور /today استفاده کنید.")
 
 # Show today's tasks
 async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -369,41 +397,61 @@ async def date_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Show tasks with checkboxes for a specific date
 async def show_tasks_for_date(update_or_callback, context: ContextTypes.DEFAULT_TYPE, user_id, date):
-    tasks = get_tasks_by_date(user_id, date)
-    
-    if not tasks:
-        message = f"❌ هیچ تسکی برای تاریخ {date} ثبت نشده."
-        if isinstance(update_or_callback, Update):
-            await update_or_callback.message.reply_text(message)
+    try:
+        tasks = get_tasks_by_date(user_id, date)
+        logger.info(f"Retrieved {len(tasks)} tasks for user {user_id} on date {date}")
+        
+        if not tasks:
+            message = f"❌ هیچ تسکی برای تاریخ {date} ثبت نشده."
+            if isinstance(update_or_callback, Update):
+                await update_or_callback.message.reply_text(message)
+            else:
+                await update_or_callback.edit_message_text(message)
+            return
+
+        keyboard = []
+        for task_id, task_text, is_done in tasks:
+            status = "✅" if is_done else "⬜"
+            button_text = f"{status} {task_text}"
+            # Truncate long task names for button display
+            if len(button_text) > 60:
+                button_text = button_text[:57] + "..."
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=f"toggle:{task_id}:{date}")])
+
+        # Get completion status
+        total, done, is_daily_completed = get_all_task_status(user_id, date)
+        
+        if is_daily_completed:
+            keyboard.append([InlineKeyboardButton("🎉 روز تکمیل شده", callback_data=f"completed:{date}")])
         else:
-            await update_or_callback.edit_message_text(message)
-        return
+            keyboard.append([InlineKeyboardButton("✅ اتمام روز", callback_data=f"complete_day:{date}")])
 
-    keyboard = []
-    for task_id, task_text, is_done in tasks:
-        status = "✅" if is_done else "⬜"
-        keyboard.append([InlineKeyboardButton(f"{status} {task_text}", callback_data=f"toggle:{task_id}:{date}")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Create status message
+        percentage = int((done / total) * 100) if total > 0 else 0
+        status_emoji = "🎉" if is_daily_completed else "🟢" if percentage >= 80 else "🟡" if percentage >= 50 else "🔴"
+        
+        # Convert date to Persian if possible
+        try:
+            persian_date = jdatetime.datetime.strptime(date, "%Y-%m-%d").strftime("%Y/%m/%d")
+        except:
+            persian_date = date
+            
+        message = f"{status_emoji} تسک‌های {persian_date}:\n({done}/{total} تسک - {percentage}%)"
 
-    # Get completion status
-    total, done, is_daily_completed = get_all_task_status(user_id, date)
-    
-    if is_daily_completed:
-        keyboard.append([InlineKeyboardButton("🎉 روز تکمیل شده", callback_data=f"completed:{date}")])
-    else:
-        keyboard.append([InlineKeyboardButton("✅ اتمام روز", callback_data=f"complete_day:{date}")])
-
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    # Create status message
-    percentage = int((done / total) * 100) if total > 0 else 0
-    status_emoji = "🎉" if is_daily_completed else "🟢" if percentage >= 80 else "🟡" if percentage >= 50 else "🔴"
-    
-    message = f"{status_emoji} تسک‌های تاریخ {date}:\n({done}/{total} تسک - {percentage}%)"
-
-    if isinstance(update_or_callback, Update):
-        await update_or_callback.message.reply_text(message, reply_markup=reply_markup)
-    else:  # CallbackQuery
-        await update_or_callback.edit_message_text(message, reply_markup=reply_markup)
+        if isinstance(update_or_callback, Update):
+            await update_or_callback.message.reply_text(message, reply_markup=reply_markup)
+        else:  # CallbackQuery
+            await update_or_callback.edit_message_text(message, reply_markup=reply_markup)
+            
+    except Exception as e:
+        logger.error(f"Error in show_tasks_for_date: {e}")
+        error_message = f"خطا در نمایش تسک‌ها: {str(e)}"
+        if isinstance(update_or_callback, Update):
+            await update_or_callback.message.reply_text(error_message)
+        else:
+            await update_or_callback.edit_message_text(error_message)
 
 # Handle button callbacks
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -464,6 +512,56 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error parsing callback data: {query.data}, error: {e}")
         await query.edit_message_text("❌ خطا در پردازش درخواست.")
         return
+
+# Debug command to check database status
+async def debug_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.chat_id
+    
+    if user_id not in USERS:
+        await update.message.reply_text("❌ شما مجاز به استفاده از این ربات نیستید.")
+        return
+    
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        
+        # Check if database file exists
+        db_exists = os.path.exists(DB_FILE)
+        
+        # Count total tasks for this user
+        cursor.execute('SELECT COUNT(*) FROM tasks WHERE user_id = ?', (user_id,))
+        total_tasks = cursor.fetchone()[0]
+        
+        # Count today's tasks
+        today = jdatetime.date.today().strftime("%Y-%m-%d")
+        cursor.execute('SELECT COUNT(*) FROM tasks WHERE user_id = ? AND date = ?', (user_id, today))
+        today_tasks = cursor.fetchone()[0]
+        
+        # Get recent tasks
+        cursor.execute(
+            'SELECT date, task_text FROM tasks WHERE user_id = ? ORDER BY created_at DESC LIMIT 5',
+            (user_id,)
+        )
+        recent_tasks = cursor.fetchall()
+        
+        conn.close()
+        
+        message = f"🔧 اطلاعات دیباگ:\n\n"
+        message += f"📁 دیتابیس موجود: {'✅' if db_exists else '❌'}\n"
+        message += f"📊 کل تسک‌ها: {total_tasks}\n"
+        message += f"📅 تسک‌های امروز ({today}): {today_tasks}\n\n"
+        
+        if recent_tasks:
+            message += "📝 آخرین تسک‌ها:\n"
+            for date, task_text in recent_tasks:
+                message += f"• {date}: {task_text[:30]}...\n"
+        else:
+            message += "❌ هیچ تسکی یافت نشد\n"
+            
+        await update.message.reply_text(message)
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ خطا در دیباگ: {str(e)}")
 
 # Show last 5 days summary
 async def last5_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -584,6 +682,7 @@ def main():
     app.add_handler(CommandHandler("today", today))
     app.add_handler(CommandHandler("date", date_tasks))
     app.add_handler(CommandHandler("last5", last5_days))
+    app.add_handler(CommandHandler("debug", debug_info))  # Add debug command
     app.add_handler(CallbackQueryHandler(handle_callback))
     
     # Add error handler
