@@ -81,11 +81,18 @@ def init_database():
             user_id INTEGER,
             date TEXT,
             total_tasks INTEGER,
-            is_completed INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(user_id, date)
         )
     ''')
+    
+    # Check if is_completed column exists, if not add it
+    try:
+        cursor.execute("SELECT is_completed FROM daily_entries LIMIT 1")
+    except sqlite3.OperationalError:
+        # Column doesn't exist, add it
+        cursor.execute("ALTER TABLE daily_entries ADD COLUMN is_completed INTEGER DEFAULT 0")
+        logger.info("Added is_completed column to daily_entries table")
     
     conn.commit()
     conn.close()
@@ -112,11 +119,18 @@ def save_daily_tasks(user_id, date, tasks):
                 )
                 logger.info(f"Inserted task {i+1}: {task.strip()[:50]}...")
         
-        # Update or insert daily entry
-        cursor.execute(
-            'INSERT OR REPLACE INTO daily_entries (user_id, date, total_tasks, is_completed) VALUES (?, ?, ?, 0)',
-            (user_id, date, len([t for t in tasks if t.strip()]))
-        )
+        # Update or insert daily entry - try with is_completed first
+        try:
+            cursor.execute(
+                'INSERT OR REPLACE INTO daily_entries (user_id, date, total_tasks, is_completed) VALUES (?, ?, ?, 0)',
+                (user_id, date, len([t for t in tasks if t.strip()]))
+            )
+        except sqlite3.OperationalError:
+            # Column doesn't exist, insert without it
+            cursor.execute(
+                'INSERT OR REPLACE INTO daily_entries (user_id, date, total_tasks) VALUES (?, ?, ?)',
+                (user_id, date, len([t for t in tasks if t.strip()]))
+            )
         
         conn.commit()
         conn.close()
@@ -195,40 +209,72 @@ def has_tasks_for_date(user_id, date):
     return count > 0
 
 def is_daily_completed(user_id, date):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    
-    cursor.execute('SELECT is_completed FROM daily_entries WHERE user_id = ? AND date = ?', (user_id, date))
-    result = cursor.fetchone()
-    conn.close()
-    return result and result[0] == 1
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        
+        cursor.execute('SELECT is_completed FROM daily_entries WHERE user_id = ? AND date = ?', (user_id, date))
+        result = cursor.fetchone()
+        conn.close()
+        return result and result[0] == 1
+    except sqlite3.OperationalError:
+        # Column doesn't exist yet, return False
+        return False
+    except Exception as e:
+        logger.error(f"Error checking daily completion: {e}")
+        return False
 
 def mark_daily_completed(user_id, date):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    
-    cursor.execute('UPDATE daily_entries SET is_completed = 1 WHERE user_id = ? AND date = ?', (user_id, date))
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        
+        cursor.execute('UPDATE daily_entries SET is_completed = 1 WHERE user_id = ? AND date = ?', (user_id, date))
+        conn.commit()
+        conn.close()
+    except sqlite3.OperationalError as e:
+        # Column might not exist, try to add it first
+        logger.error(f"Error marking daily completed: {e}")
+        # Re-initialize database to add missing column
+        init_database()
+        # Try again
+        try:
+            conn = sqlite3.connect(DB_FILE)
+            cursor = conn.cursor()
+            cursor.execute('UPDATE daily_entries SET is_completed = 1 WHERE user_id = ? AND date = ?', (user_id, date))
+            conn.commit()
+            conn.close()
+        except Exception as e2:
+            logger.error(f"Error after re-init: {e2}")
+    except Exception as e:
+        logger.error(f"Error marking daily completed: {e}")
 
 def get_all_task_status(user_id, date):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    
-    cursor.execute(
-        'SELECT COUNT(*) as total, SUM(is_done) as done FROM tasks WHERE user_id = ? AND date = ?',
-        (user_id, date)
-    )
-    
-    result = cursor.fetchone()
-    total, done = result[0], result[1] or 0
-    
-    cursor.execute('SELECT is_completed FROM daily_entries WHERE user_id = ? AND date = ?', (user_id, date))
-    completed_result = cursor.fetchone()
-    is_completed = completed_result and completed_result[0] == 1
-    
-    conn.close()
-    return total, done, is_completed
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        
+        cursor.execute(
+            'SELECT COUNT(*) as total, SUM(is_done) as done FROM tasks WHERE user_id = ? AND date = ?',
+            (user_id, date)
+        )
+        
+        result = cursor.fetchone()
+        total, done = result[0], result[1] or 0
+        
+        try:
+            cursor.execute('SELECT is_completed FROM daily_entries WHERE user_id = ? AND date = ?', (user_id, date))
+            completed_result = cursor.fetchone()
+            is_completed = completed_result and completed_result[0] == 1
+        except sqlite3.OperationalError:
+            # Column doesn't exist yet
+            is_completed = False
+        
+        conn.close()
+        return total, done, is_completed
+    except Exception as e:
+        logger.error(f"Error getting task status: {e}")
+        return 0, 0, False
 
 # Global scheduler
 scheduler = AsyncIOScheduler(timezone=pytz.timezone('Asia/Tehran'))
@@ -581,7 +627,12 @@ async def last5_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     for date, total, done in results:
         percentage = int((done / total) * 100) if total > 0 else 0
-        is_completed = is_daily_completed(user_id, date)
+        
+        # Check if day is completed (with error handling)
+        try:
+            is_completed = is_daily_completed(user_id, date)
+        except:
+            is_completed = False
         
         if is_completed:
             status_emoji = "🎉"
