@@ -467,6 +467,32 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await show_tasks_for_date(update, context, user_id, today)
 
+# # Show tasks for specific date
+# async def date_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+#     user_id = update.message.chat_id
+    
+#     if user_id not in USERS:
+#         await update.message.reply_text("❌ شما مجاز به استفاده از این ربات نیستید.")
+#         return
+    
+#     # Get date from command
+#     args = context.args
+#     if not args:
+#         await update.message.reply_text("❌ لطفاً تاریخ را به فرمت YYYY-MM-DD وارد کنید.\n\nمثال:\n/date 2024-01-15")
+#         return
+    
+#     date_str = args[0]
+#     try:
+#         # Validate date format
+#         datetime.strptime(date_str, "%Y-%m-%d")
+#     except ValueError:
+#         await update.message.reply_text("❌ فرمت تاریخ اشتباه است. لطفاً به فرمت YYYY-MM-DD وارد کنید.\n\nمثال: 2024-01-15")
+#         return
+    
+#     await show_tasks_for_date(update, context, user_id, date_str)
+
+import jdatetime
+
 # Show tasks for specific date
 async def date_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.chat_id
@@ -478,18 +504,21 @@ async def date_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Get date from command
     args = context.args
     if not args:
-        await update.message.reply_text("❌ لطفاً تاریخ را به فرمت YYYY-MM-DD وارد کنید.\n\nمثال:\n/date 2024-01-15")
+        await update.message.reply_text("❌ لطفاً تاریخ را به فرمت YYYY-MM-DD (جلالی) وارد کنید.\n\nمثال:\n/date 1404-07-01")
         return
     
     date_str = args[0]
     try:
-        # Validate date format
-        datetime.strptime(date_str, "%Y-%m-%d")
+        # Validate Jalali date format
+        jdatetime.datetime.strptime(date_str, "%Y-%m-%d")
     except ValueError:
-        await update.message.reply_text("❌ فرمت تاریخ اشتباه است. لطفاً به فرمت YYYY-MM-DD وارد کنید.\n\nمثال: 2024-01-15")
+        await update.message.reply_text("❌ فرمت تاریخ اشتباه است. لطفاً به فرمت YYYY-MM-DD (جلالی) وارد کنید.\n\nمثال: 1404-07-01")
         return
     
+    
+    # ارسال به تابع نمایش تسک‌ها (می‌تونی jalali یا gregorian رو پاس بدی)
     await show_tasks_for_date(update, context, user_id, date_str)
+
 
 # Show tasks with checkboxes for a specific date
 async def show_tasks_for_date(update_or_callback, context: ContextTypes.DEFAULT_TYPE, user_id, date):
