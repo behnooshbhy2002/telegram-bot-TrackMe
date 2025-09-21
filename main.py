@@ -10,6 +10,7 @@ import jdatetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
+import re
 
 # Configure logging
 logging.basicConfig(
@@ -80,6 +81,7 @@ def init_database():
             user_id INTEGER,
             date TEXT,
             total_tasks INTEGER,
+            is_completed INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(user_id, date)
         )
@@ -105,7 +107,7 @@ def save_daily_tasks(user_id, date, tasks):
     
     # Update or insert daily entry
     cursor.execute(
-        'INSERT OR REPLACE INTO daily_entries (user_id, date, total_tasks) VALUES (?, ?, ?)',
+        'INSERT OR REPLACE INTO daily_entries (user_id, date, total_tasks, is_completed) VALUES (?, ?, ?, 0)',
         (user_id, date, len(tasks))
     )
     
@@ -172,6 +174,42 @@ def has_tasks_for_date(user_id, date):
     conn.close()
     return count > 0
 
+def is_daily_completed(user_id, date):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT is_completed FROM daily_entries WHERE user_id = ? AND date = ?', (user_id, date))
+    result = cursor.fetchone()
+    conn.close()
+    return result and result[0] == 1
+
+def mark_daily_completed(user_id, date):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    cursor.execute('UPDATE daily_entries SET is_completed = 1 WHERE user_id = ? AND date = ?', (user_id, date))
+    conn.commit()
+    conn.close()
+
+def get_all_task_status(user_id, date):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    cursor.execute(
+        'SELECT COUNT(*) as total, SUM(is_done) as done FROM tasks WHERE user_id = ? AND date = ?',
+        (user_id, date)
+    )
+    
+    result = cursor.fetchone()
+    total, done = result[0], result[1] or 0
+    
+    cursor.execute('SELECT is_completed FROM daily_entries WHERE user_id = ? AND date = ?', (user_id, date))
+    completed_result = cursor.fetchone()
+    is_completed = completed_result and completed_result[0] == 1
+    
+    conn.close()
+    return total, done, is_completed
+
 # Global scheduler
 scheduler = AsyncIOScheduler(timezone=pytz.timezone('Asia/Tehran'))
 
@@ -192,48 +230,107 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🎯 سلام {USERS[user_id]}! به ربات مدیریت تسک‌ها خوش آمدید.
 
 📋 دستورات موجود:
-/tasks - افزودن تسک‌های امروز
+/tasks - افزودن تسک‌های امروز یا روز مشخص
 /today - نمایش تسک‌های امروز
 /date - نمایش تسک‌های روز مشخص
 /last5 - نمایش 5 روز گذشته
-/done - گزارش پیشرفت امروز
 
 ⏰ یادآوری‌ها:
-• ساعت 9 صبح: یادآوری ثبت تسک‌ها
+• ساعت 9 صبح: یادآوری ثبت تسک‌ها (فقط اگر ثبت نکرده باشید)
 • ساعت 10 صبح: یادآوری خواب
+
+💡 نکته: در انتهای لیست تسک‌های هر روز، گزینه "✅ اتمام روز" برای تکمیل روز وجود دارد.
 
 برای شروع، تسک‌های امروزتان را با دستور /tasks وارد کنید.
     """
     
     await update.message.reply_text(welcome_message)
 
+def parse_date_from_text(text):
+    """Extract date from text in various formats"""
+    # Remove /tasks command
+    text = text.replace("/tasks", "").strip()
+    
+    # Look for date patterns at the beginning or end
+    date_patterns = [
+        r'(\d{4}-\d{1,2}-\d{1,2})',  # YYYY-MM-DD or YYYY-M-D
+        r'(\d{1,2}/\d{1,2}/\d{4})',  # DD/MM/YYYY or D/M/YYYY
+        r'(\d{1,2}-\d{1,2}-\d{4})',  # DD-MM-YYYY or D-M-YYYY
+    ]
+    
+    for pattern in date_patterns:
+        match = re.search(pattern, text)
+        if match:
+            date_str = match.group(1)
+            # Convert different formats to YYYY-MM-DD
+            if '/' in date_str:
+                parts = date_str.split('/')
+                if len(parts) == 3:
+                    day, month, year = parts
+                    date_str = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+            elif '-' in date_str and not date_str.startswith('20'):  # DD-MM-YYYY format
+                parts = date_str.split('-')
+                if len(parts) == 3:
+                    day, month, year = parts
+                    date_str = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+            
+            # Validate the date
+            try:
+                datetime.strptime(date_str, "%Y-%m-%d")
+                # Remove the date from the original text
+                remaining_text = re.sub(pattern, '', text).strip()
+                return date_str, remaining_text
+            except ValueError:
+                continue
+    
+    return None, text
+
 # Add tasks
 async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.chat_id
-    today = jdatetime.date.today().strftime("%Y-%m-%d")
     
     # Check if user is authorized
     if user_id not in USERS:
         await update.message.reply_text("❌ شما مجاز به استفاده از این ربات نیستید.")
         return
     
-    logger.info(f"User {user_id} ({USERS[user_id]}) adding tasks for {today}")
-
     # Get text after /tasks
     task_text = update.message.text.replace("/tasks", "").strip()
     if not task_text:
-        await update.message.reply_text("❌ لطفاً بعد از /tasks لیست تسک‌ها رو بنویس (هر خط یک تسک).\n\nمثال:\n/tasks تمرین ورزشی\nخرید مواد غذایی\nمطالعه کتاب")
+        await update.message.reply_text(
+            "❌ لطفاً بعد از /tasks لیست تسک‌ها رو بنویس (هر خط یک تسک).\n\n"
+            "مثال:\n"
+            "/tasks تمرین ورزشی\nخرید مواد غذایی\nمطالعه کتاب\n\n"
+            "یا برای روز مشخص:\n"
+            "/tasks 2024-01-15\nتمرین ورزشی\nخرید مواد غذایی"
+        )
         return
 
-    task_list = [task.strip() for task in task_text.split("\n") if task.strip()]
+    # Try to parse date from the text
+    date_from_text, remaining_text = parse_date_from_text(update.message.text)
+    
+    if date_from_text:
+        target_date = date_from_text
+        task_content = remaining_text
+    else:
+        target_date = jdatetime.date.today().strftime("%Y-%m-%d")
+        task_content = task_text
+
+    if not task_content.strip():
+        await update.message.reply_text("❌ لطفاً حداقل یک تسک وارد کنید.")
+        return
+
+    task_list = [task.strip() for task in task_content.split("\n") if task.strip()]
+
+    logger.info(f"User {user_id} ({USERS[user_id]}) adding {len(task_list)} tasks for {target_date}")
 
     # Save to database
-    save_daily_tasks(user_id, today, task_list)
+    save_daily_tasks(user_id, target_date, task_list)
 
     # Notify partners about task entry
-    await notify_task_entry(context, user_id, today, len(task_list))
+    await notify_task_entry(context, user_id, target_date, len(task_list))
 
-    await show_tasks_for_date(update, context, user_id, today)
+    await show_tasks_for_date(update, context, user_id, target_date)
 
 # Show today's tasks
 async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -287,16 +384,29 @@ async def show_tasks_for_date(update_or_callback, context: ContextTypes.DEFAULT_
         status = "✅" if is_done else "⬜"
         keyboard.append([InlineKeyboardButton(f"{status} {task_text}", callback_data=f"toggle:{task_id}:{date}")])
 
+    # Get completion status
+    total, done, is_daily_completed = get_all_task_status(user_id, date)
+    
+    if is_daily_completed:
+        keyboard.append([InlineKeyboardButton("🎉 روز تکمیل شده", callback_data=f"completed:{date}")])
+    else:
+        keyboard.append([InlineKeyboardButton("✅ اتمام روز", callback_data=f"complete_day:{date}")])
+
     reply_markup = InlineKeyboardMarkup(keyboard)
-    message = f"📋 تسک‌های تاریخ {date}:"
+    
+    # Create status message
+    percentage = int((done / total) * 100) if total > 0 else 0
+    status_emoji = "🎉" if is_daily_completed else "🟢" if percentage >= 80 else "🟡" if percentage >= 50 else "🔴"
+    
+    message = f"{status_emoji} تسک‌های تاریخ {date}:\n({done}/{total} تسک - {percentage}%)"
 
     if isinstance(update_or_callback, Update):
         await update_or_callback.message.reply_text(message, reply_markup=reply_markup)
     else:  # CallbackQuery
         await update_or_callback.edit_message_text(message, reply_markup=reply_markup)
 
-# Toggle task completion
-async def toggle_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Handle button callbacks
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
@@ -307,16 +417,53 @@ async def toggle_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        _, task_id, date = query.data.split(":")
-        task_id = int(task_id)
-    except (ValueError, IndexError):
+        action, *params = query.data.split(":")
+        
+        if action == "toggle":
+            task_id, date = int(params[0]), params[1]
+            # Toggle task status
+            toggle_task_status(task_id)
+            await show_tasks_for_date(query, context, user_id, date)
+            
+        elif action == "complete_day":
+            date = params[0]
+            # Mark the day as completed
+            mark_daily_completed(user_id, date)
+            
+            # Get final statistics
+            total, done_count, _ = get_all_task_status(user_id, date)
+            percentage = int((done_count / total) * 100) if total > 0 else 0
+            
+            # Update the message
+            await show_tasks_for_date(query, context, user_id, date)
+            
+            # Send completion message
+            status_emoji = "🎉" if percentage >= 80 else "👍" if percentage >= 50 else "💪"
+            await query.message.reply_text(
+                f"{status_emoji} روز {date} تکمیل شد!\n"
+                f"تعداد {done_count} از {total} تسک انجام شد ({percentage}%)."
+            )
+
+            # Notify the other users
+            other_users = [uid for uid in USERS if uid != user_id]
+            for other_user in other_users:
+                try:
+                    await context.bot.send_message(
+                        chat_id=other_user,
+                        text=f"📢 {USERS[user_id]} روز {date} خودش رو تکمیل کرد!\n"
+                             f"تعداد {done_count} از {total} تسک انجام داد ({percentage}%)."
+                    )
+                except Exception as e:
+                    logger.error(f"Error sending completion notification to {other_user}: {e}")
+                    
+        elif action == "completed":
+            # Already completed, just show info
+            await query.answer("این روز قبلاً تکمیل شده است! 🎉")
+            
+    except (ValueError, IndexError) as e:
+        logger.error(f"Error parsing callback data: {query.data}, error: {e}")
         await query.edit_message_text("❌ خطا در پردازش درخواست.")
         return
-
-    # Toggle task status
-    toggle_task_status(task_id)
-
-    await show_tasks_for_date(query, context, user_id, date)
 
 # Show last 5 days summary
 async def last5_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -336,7 +483,12 @@ async def last5_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     for date, total, done in results:
         percentage = int((done / total) * 100) if total > 0 else 0
-        status_emoji = "🟢" if percentage >= 80 else "🟡" if percentage >= 50 else "🔴"
+        is_completed = is_daily_completed(user_id, date)
+        
+        if is_completed:
+            status_emoji = "🎉"
+        else:
+            status_emoji = "🟢" if percentage >= 80 else "🟡" if percentage >= 50 else "🔴"
         
         # Convert to Persian date if needed
         try:
@@ -344,44 +496,10 @@ async def last5_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             persian_date = date
             
-        message += f"{status_emoji} {persian_date}: {done}/{total} تسک ({percentage}%)\n"
+        completion_text = " (تکمیل شده)" if is_completed else ""
+        message += f"{status_emoji} {persian_date}: {done}/{total} تسک ({percentage}%){completion_text}\n"
     
     await update.message.reply_text(message)
-
-# Done command
-async def done(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.chat_id
-    today = jdatetime.date.today().strftime("%Y-%m-%d")
-
-    # Check if user is authorized
-    if user_id not in USERS:
-        await update.message.reply_text("❌ شما مجاز به استفاده از این ربات نیستید.")
-        return
-
-    total, done_count = get_task_summary(user_id, today)
-    
-    if total == 0:
-        await update.message.reply_text("❌ هیچ تسکی برای امروز ثبت نکردی.")
-        return
-
-    percentage = int((done_count / total) * 100) if total > 0 else 0
-    
-    # Report to self
-    status_emoji = "🎉" if percentage >= 80 else "👍" if percentage >= 50 else "💪"
-    await update.message.reply_text(
-        f"{status_emoji} امروز ({today}) {done_count} از {total} تسک رو انجام دادی ({percentage}%)."
-    )
-
-    # Notify the other users
-    other_users = [uid for uid in USERS if uid != user_id]
-    for other_user in other_users:
-        try:
-            await context.bot.send_message(
-                chat_id=other_user,
-                text=f"📢 {USERS[user_id]} امروز ({today}) {done_count} از {total} تسک خودش رو انجام داد ({percentage}%)."
-            )
-        except Exception as e:
-            logger.error(f"Error sending notification to {other_user}: {e}")
 
 # Notification functions
 async def notify_task_entry(context: ContextTypes.DEFAULT_TYPE, user_id, date, task_count):
@@ -397,7 +515,7 @@ async def notify_task_entry(context: ContextTypes.DEFAULT_TYPE, user_id, date, t
             logger.error(f"Error sending task entry notification to {other_user}: {e}")
 
 async def send_daily_task_reminder(context: ContextTypes.DEFAULT_TYPE):
-    """Send reminder at 9 AM to users who haven't entered tasks"""
+    """Send reminder at 9 AM only to users who haven't entered tasks for today"""
     today = jdatetime.date.today().strftime("%Y-%m-%d")
     
     for user_id in USERS:
@@ -405,7 +523,9 @@ async def send_daily_task_reminder(context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(
                     chat_id=user_id,
-                    text=f"⏰ صبح بخیر {USERS[user_id]}!\n\nهنوز تسک‌های امروزت رو وارد نکردی. لطفاً با دستور /tasks تسک‌هات رو ثبت کن."
+                    text=f"⏰ صبح بخیر {USERS[user_id]}!\n\n"
+                         f"هنوز تسک‌های امروزت رو وارد نکردی. "
+                         f"لطفاً با دستور /tasks تسک‌هات رو ثبت کن."
                 )
             except Exception as e:
                 logger.error(f"Error sending daily reminder to {user_id}: {e}")
@@ -429,11 +549,10 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 async def set_bot_commands(application):
     commands = [
         BotCommand("start", "شروع و راهنما"),
-        BotCommand("tasks", "افزودن تسک‌های امروز"),
+        BotCommand("tasks", "افزودن تسک‌های امروز یا روز مشخص"),
         BotCommand("today", "نمایش تسک‌های امروز"),
         BotCommand("date", "نمایش تسک‌های روز مشخص"),
         BotCommand("last5", "نمایش 5 روز گذشته"),
-        BotCommand("done", "گزارش پیشرفت امروز"),
     ]
     
     await application.bot.set_my_commands(commands)
@@ -465,8 +584,7 @@ def main():
     app.add_handler(CommandHandler("today", today))
     app.add_handler(CommandHandler("date", date_tasks))
     app.add_handler(CommandHandler("last5", last5_days))
-    app.add_handler(CommandHandler("done", done))
-    app.add_handler(CallbackQueryHandler(toggle_task))
+    app.add_handler(CallbackQueryHandler(handle_callback))
     
     # Add error handler
     app.add_error_handler(error_handler)
@@ -477,14 +595,14 @@ def main():
     # Schedule reminders with Iran timezone
     iran_tz = pytz.timezone('Asia/Tehran')
     
-    # Daily task reminder at 9:00 AM Iran time
+    # Daily task reminder at 9:00 AM Iran time (only for users who haven't entered tasks)
     app.job_queue.run_daily(
         send_daily_task_reminder,
         time=time(hour=9, minute=0, tzinfo=iran_tz),
         name="daily_task_reminder"
     )
     
-    # Sleep reminder at 10:00 AM Iran time (you can change this time as needed)
+    # Sleep reminder at 10:00 AM Iran time
     app.job_queue.run_daily(
         send_sleep_reminder,
         time=time(hour=10, minute=0, tzinfo=iran_tz),
