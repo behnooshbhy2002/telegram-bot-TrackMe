@@ -315,7 +315,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 #     return None, text
 
 def parse_date_from_text(text):
-    """Extract date from text in various formats (both Jalali and Gregorian)"""
+    """Extract date from text in various formats (both Jalali and Gregorian) and convert to Jalali"""
     # Remove /tasks command
     text = text.replace("/tasks", "").strip()
     
@@ -341,8 +341,8 @@ def parse_date_from_text(text):
             if len(parts) != 3:
                 continue
                 
-            # Try to determine if it's Jalali or Gregorian and convert accordingly
-            converted_date = convert_date_to_gregorian(parts, separator, date_str)
+            # Try to determine if it's Jalali or Gregorian and convert to Jalali
+            converted_date = convert_date_to_jalali(parts, separator, date_str)
             
             if converted_date:
                 # Remove the date from the original text
@@ -351,8 +351,8 @@ def parse_date_from_text(text):
     
     return None, text
 
-def convert_date_to_gregorian(parts, separator, original_date_str):
-    """Convert date parts to Gregorian YYYY-MM-DD format"""
+def convert_date_to_jalali(parts, separator, original_date_str):
+    """Convert date parts to Jalali YYYY-MM-DD format"""
     try:
         # Check if it's in YYYY-MM-DD or YYYY/MM/DD format
         if len(parts[0]) == 4:  # First part is year
@@ -360,18 +360,18 @@ def convert_date_to_gregorian(parts, separator, original_date_str):
             
             # Check if it looks like Jalali (year >= 1300)
             if year >= 1300:
-                # It's Jalali, convert to Gregorian
+                # It's already Jalali, just validate and format
                 try:
                     jalali_date = jdatetime.date(year, month, day)
-                    gregorian_date = jalali_date.togregorian()
-                    return gregorian_date.strftime("%Y-%m-%d")
+                    return jalali_date.strftime("%Y-%m-%d")
                 except (ValueError, jdatetime.InvalidJalaliDate):
                     return None
             else:
-                # It's Gregorian, validate and format
+                # It's Gregorian, convert to Jalali
                 try:
                     gregorian_date = datetime(year, month, day).date()
-                    return gregorian_date.strftime("%Y-%m-%d")
+                    jalali_date = jdatetime.date.fromgregorian(date=gregorian_date)
+                    return jalali_date.strftime("%Y-%m-%d")
                 except ValueError:
                     return None
         
@@ -381,18 +381,18 @@ def convert_date_to_gregorian(parts, separator, original_date_str):
             
             # Check if it looks like Jalali (year >= 1300)
             if year >= 1300:
-                # It's Jalali, convert to Gregorian
+                # It's already Jalali, just validate and format
                 try:
                     jalali_date = jdatetime.date(year, month, day)
-                    gregorian_date = jalali_date.togregorian()
-                    return gregorian_date.strftime("%Y-%m-%d")
+                    return jalali_date.strftime("%Y-%m-%d")
                 except (ValueError, jdatetime.InvalidJalaliDate):
                     return None
             else:
-                # It's Gregorian, validate and format
+                # It's Gregorian, convert to Jalali
                 try:
                     gregorian_date = datetime(year, month, day).date()
-                    return gregorian_date.strftime("%Y-%m-%d")
+                    jalali_date = jdatetime.date.fromgregorian(date=gregorian_date)
+                    return jalali_date.strftime("%Y-%m-%d")
                 except ValueError:
                     return None
                     
@@ -400,7 +400,6 @@ def convert_date_to_gregorian(parts, separator, original_date_str):
         return None
     
     return None
-
 
 # Add tasks
 async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
