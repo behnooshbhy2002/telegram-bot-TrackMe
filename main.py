@@ -81,18 +81,11 @@ def init_database():
             user_id INTEGER,
             date TEXT,
             total_tasks INTEGER,
+            is_completed INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(user_id, date)
         )
     ''')
-    
-    # Check if is_completed column exists, if not add it
-    try:
-        cursor.execute("SELECT is_completed FROM daily_entries LIMIT 1")
-    except sqlite3.OperationalError:
-        # Column doesn't exist, add it
-        cursor.execute("ALTER TABLE daily_entries ADD COLUMN is_completed INTEGER DEFAULT 0")
-        logger.info("Added is_completed column to daily_entries table")
     
     conn.commit()
     conn.close()
@@ -119,18 +112,11 @@ def save_daily_tasks(user_id, date, tasks):
                 )
                 logger.info(f"Inserted task {i+1}: {task.strip()[:50]}...")
         
-        # Update or insert daily entry - try with is_completed first
-        try:
-            cursor.execute(
-                'INSERT OR REPLACE INTO daily_entries (user_id, date, total_tasks, is_completed) VALUES (?, ?, ?, 0)',
-                (user_id, date, len([t for t in tasks if t.strip()]))
-            )
-        except sqlite3.OperationalError:
-            # Column doesn't exist, insert without it
-            cursor.execute(
-                'INSERT OR REPLACE INTO daily_entries (user_id, date, total_tasks) VALUES (?, ?, ?)',
-                (user_id, date, len([t for t in tasks if t.strip()]))
-            )
+        # Update or insert daily entry
+        cursor.execute(
+            'INSERT OR REPLACE INTO daily_entries (user_id, date, total_tasks, is_completed) VALUES (?, ?, ?, 0)',
+            (user_id, date, len([t for t in tasks if t.strip()]))
+        )
         
         conn.commit()
         conn.close()
@@ -166,6 +152,15 @@ def toggle_task_status(task_id):
     cursor = conn.cursor()
     
     cursor.execute('UPDATE tasks SET is_done = NOT is_done WHERE id = ?', (task_id,))
+    conn.commit()
+    conn.close()
+
+def mark_all_tasks_done(user_id, date):
+    """Mark all tasks as done for a specific date"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    cursor.execute('UPDATE tasks SET is_done = 1 WHERE user_id = ? AND date = ?', (user_id, date))
     conn.commit()
     conn.close()
 
@@ -209,72 +204,40 @@ def has_tasks_for_date(user_id, date):
     return count > 0
 
 def is_daily_completed(user_id, date):
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
-        cursor.execute('SELECT is_completed FROM daily_entries WHERE user_id = ? AND date = ?', (user_id, date))
-        result = cursor.fetchone()
-        conn.close()
-        return result and result[0] == 1
-    except sqlite3.OperationalError:
-        # Column doesn't exist yet, return False
-        return False
-    except Exception as e:
-        logger.error(f"Error checking daily completion: {e}")
-        return False
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT is_completed FROM daily_entries WHERE user_id = ? AND date = ?', (user_id, date))
+    result = cursor.fetchone()
+    conn.close()
+    return result and result[0] == 1
 
 def mark_daily_completed(user_id, date):
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
-        cursor.execute('UPDATE daily_entries SET is_completed = 1 WHERE user_id = ? AND date = ?', (user_id, date))
-        conn.commit()
-        conn.close()
-    except sqlite3.OperationalError as e:
-        # Column might not exist, try to add it first
-        logger.error(f"Error marking daily completed: {e}")
-        # Re-initialize database to add missing column
-        init_database()
-        # Try again
-        try:
-            conn = sqlite3.connect(DB_FILE)
-            cursor = conn.cursor()
-            cursor.execute('UPDATE daily_entries SET is_completed = 1 WHERE user_id = ? AND date = ?', (user_id, date))
-            conn.commit()
-            conn.close()
-        except Exception as e2:
-            logger.error(f"Error after re-init: {e2}")
-    except Exception as e:
-        logger.error(f"Error marking daily completed: {e}")
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    cursor.execute('UPDATE daily_entries SET is_completed = 1 WHERE user_id = ? AND date = ?', (user_id, date))
+    conn.commit()
+    conn.close()
 
 def get_all_task_status(user_id, date):
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
-        cursor.execute(
-            'SELECT COUNT(*) as total, SUM(is_done) as done FROM tasks WHERE user_id = ? AND date = ?',
-            (user_id, date)
-        )
-        
-        result = cursor.fetchone()
-        total, done = result[0], result[1] or 0
-        
-        try:
-            cursor.execute('SELECT is_completed FROM daily_entries WHERE user_id = ? AND date = ?', (user_id, date))
-            completed_result = cursor.fetchone()
-            is_completed = completed_result and completed_result[0] == 1
-        except sqlite3.OperationalError:
-            # Column doesn't exist yet
-            is_completed = False
-        
-        conn.close()
-        return total, done, is_completed
-    except Exception as e:
-        logger.error(f"Error getting task status: {e}")
-        return 0, 0, False
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    
+    cursor.execute(
+        'SELECT COUNT(*) as total, SUM(is_done) as done FROM tasks WHERE user_id = ? AND date = ?',
+        (user_id, date)
+    )
+    
+    result = cursor.fetchone()
+    total, done = result[0], result[1] or 0
+    
+    cursor.execute('SELECT is_completed FROM daily_entries WHERE user_id = ? AND date = ?', (user_id, date))
+    completed_result = cursor.fetchone()
+    is_completed = completed_result and completed_result[0] == 1
+    
+    conn.close()
+    return total, done, is_completed
 
 # Global scheduler
 scheduler = AsyncIOScheduler(timezone=pytz.timezone('Asia/Tehran'))
@@ -470,7 +433,7 @@ async def show_tasks_for_date(update_or_callback, context: ContextTypes.DEFAULT_
         if is_daily_completed:
             keyboard.append([InlineKeyboardButton("🎉 روز تکمیل شده", callback_data=f"completed:{date}")])
         else:
-            keyboard.append([InlineKeyboardButton("✅ اتمام روز", callback_data=f"complete_day:{date}")])
+            keyboard.append([InlineKeyboardButton("✅ اتمام روز", callback_data=f"complete_day_confirm:{date}")])
 
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -499,6 +462,26 @@ async def show_tasks_for_date(update_or_callback, context: ContextTypes.DEFAULT_
         else:
             await update_or_callback.edit_message_text(error_message)
 
+# Show confirmation menu for completing the day
+async def show_complete_day_confirmation(query, date):
+    """Show confirmation menu for completing the day"""
+    keyboard = [
+        [InlineKeyboardButton("❌ انصراف", callback_data=f"cancel_complete:{date}")],
+        [InlineKeyboardButton("✅ انتخاب همه تسک‌ها", callback_data=f"complete_with_all:{date}")],
+        [InlineKeyboardButton("🎯 فقط اتمام روز", callback_data=f"complete_day_only:{date}")]
+    ]
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    try:
+        persian_date = jdatetime.datetime.strptime(date, "%Y-%m-%d").strftime("%Y/%m/%d")
+    except:
+        persian_date = date
+        
+    message = f"🤔 نحوه اتمام روز {persian_date} را انتخاب کنید:"
+    
+    await query.edit_message_text(message, reply_markup=reply_markup)
+
 # Handle button callbacks
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -519,26 +502,84 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             toggle_task_status(task_id)
             await show_tasks_for_date(query, context, user_id, date)
             
-        elif action == "confirm_complete":
+        elif action == "complete_day_confirm":
+            # Show confirmation menu instead of directly completing
             date = params[0]
-            # Show confirmation dialog
-            await show_completion_confirmation(query, context, user_id, date)
-            
-        elif action == "complete_day":
-            date = params[0]
-            # Mark all tasks as completed and complete the day
-            await complete_all_tasks_and_day(query, context, user_id, date)
-            
-        elif action == "complete_day_partial":
-            date = params[0]
-            # Complete the day without marking all tasks as done
-            await complete_day_only(query, context, user_id, date)
+            await show_complete_day_confirmation(query, date)
             
         elif action == "cancel_complete":
+            # Return to tasks view
             date = params[0]
-            # Go back to tasks view
             await show_tasks_for_date(query, context, user_id, date)
             
+        elif action == "complete_with_all":
+            # Mark all tasks as done and complete the day
+            date = params[0]
+            
+            # Mark all tasks as completed
+            mark_all_tasks_done(user_id, date)
+            
+            # Mark the day as completed
+            mark_daily_completed(user_id, date)
+            
+            # Get final statistics
+            total, done_count, _ = get_all_task_status(user_id, date)
+            percentage = int((done_count / total) * 100) if total > 0 else 0
+            
+            # Update the message
+            await show_tasks_for_date(query, context, user_id, date)
+            
+            # Send completion message
+            await query.message.reply_text(
+                f"🎉 روز {date} با انتخاب همه تسک‌ها تکمیل شد!\n"
+                f"تعداد {done_count} از {total} تسک انجام شد ({percentage}%)."
+            )
+
+            # Notify the other users
+            other_users = [uid for uid in USERS if uid != user_id]
+            for other_user in other_users:
+                try:
+                    await context.bot.send_message(
+                        chat_id=other_user,
+                        text=f"📢 {USERS[user_id]} روز {date} خودش رو با انتخاب همه تسک‌ها تکمیل کرد!\n"
+                             f"تعداد {done_count} از {total} تسک انجام داد ({percentage}%)."
+                    )
+                except Exception as e:
+                    logger.error(f"Error sending completion notification to {other_user}: {e}")
+                    
+        elif action == "complete_day_only":
+            # Complete the day without changing task statuses
+            date = params[0]
+            
+            # Mark the day as completed
+            mark_daily_completed(user_id, date)
+            
+            # Get current statistics (without changing tasks)
+            total, done_count, _ = get_all_task_status(user_id, date)
+            percentage = int((done_count / total) * 100) if total > 0 else 0
+            
+            # Update the message
+            await show_tasks_for_date(query, context, user_id, date)
+            
+            # Send completion message
+            status_emoji = "🎉" if percentage >= 80 else "👍" if percentage >= 50 else "💪"
+            await query.message.reply_text(
+                f"{status_emoji} روز {date} تکمیل شد!\n"
+                f"تعداد {done_count} از {total} تسک انجام شد ({percentage}%)."
+            )
+
+            # Notify the other users
+            other_users = [uid for uid in USERS if uid != user_id]
+            for other_user in other_users:
+                try:
+                    await context.bot.send_message(
+                        chat_id=other_user,
+                        text=f"📢 {USERS[user_id]} روز {date} خودش رو تکمیل کرد!\n"
+                             f"تعداد {done_count} از {total} تسک انجام داد ({percentage}%)."
+                    )
+                except Exception as e:
+                    logger.error(f"Error sending completion notification to {other_user}: {e}")
+                    
         elif action == "completed":
             # Already completed, just show info
             await query.answer("این روز قبلاً تکمیل شده است! 🎉")
@@ -616,12 +657,7 @@ async def last5_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     for date, total, done in results:
         percentage = int((done / total) * 100) if total > 0 else 0
-        
-        # Check if day is completed (with error handling)
-        try:
-            is_completed = is_daily_completed(user_id, date)
-        except:
-            is_completed = False
+        is_completed = is_daily_completed(user_id, date)
         
         if is_completed:
             status_emoji = "🎉"
@@ -638,144 +674,6 @@ async def last5_days(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message += f"{status_emoji} {persian_date}: {done}/{total} تسک ({percentage}%){completion_text}\n"
     
     await update.message.reply_text(message)
-
-async def show_completion_confirmation(query, context: ContextTypes.DEFAULT_TYPE, user_id, date):
-    """Show confirmation dialog for completing the day"""
-    try:
-        total, done, _ = get_all_task_status(user_id, date)
-        undone_count = total - done
-        
-        # Convert date to Persian if possible
-        try:
-            persian_date = jdatetime.datetime.strptime(date, "%Y-%m-%d").strftime("%Y/%m/%d")
-        except:
-            persian_date = date
-        
-        if undone_count > 0:
-            # There are incomplete tasks
-            message = (
-                f"⚠️ تأیید اتمام روز {persian_date}\n\n"
-                f"📊 وضعیت فعلی: {done}/{total} تسک\n"
-                f"❌ {undone_count} تسک انجام نشده\n\n"
-                f"آیا مطمئن هستید که می‌خواهید روز را تکمیل کنید؟"
-            )
-            
-            keyboard = [
-                [
-                    InlineKeyboardButton("✅ تکمیل + همه تسک‌ها انجام شده", callback_data=f"complete_day:{date}"),
-                ],
-                [
-                    InlineKeyboardButton("✅ فقط تکمیل روز", callback_data=f"complete_day_partial:{date}")
-                ],
-                [
-                    InlineKeyboardButton("❌ انصراف", callback_data=f"cancel_complete:{date}")
-                ]
-            ]
-        else:
-            # All tasks are done
-            message = (
-                f"🎉 تبریک! همه تسک‌های {persian_date} انجام شد!\n\n"
-                f"📊 {done}/{total} تسک انجام شده\n\n"
-                f"آیا می‌خواهید روز را تکمیل کنید؟"
-            )
-            
-            keyboard = [
-                [
-                    InlineKeyboardButton("✅ تکمیل روز", callback_data=f"complete_day:{date}")
-                ],
-                [
-                    InlineKeyboardButton("❌ انصراف", callback_data=f"cancel_complete:{date}")
-                ]
-            ]
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(message, reply_markup=reply_markup)
-        
-    except Exception as e:
-        logger.error(f"Error showing completion confirmation: {e}")
-        await query.edit_message_text("❌ خطا در نمایش تأیید تکمیل.")
-
-async def complete_all_tasks_and_day(query, context: ContextTypes.DEFAULT_TYPE, user_id, date):
-    """Mark all tasks as completed and complete the day"""
-    try:
-        # Get all incomplete tasks
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        
-        # Mark all tasks as completed
-        cursor.execute('UPDATE tasks SET is_done = 1 WHERE user_id = ? AND date = ?', (user_id, date))
-        updated_tasks = cursor.rowcount
-        
-        conn.commit()
-        conn.close()
-        
-        # Mark the day as completed
-        mark_daily_completed(user_id, date)
-        
-        # Get final statistics
-        total, done_count, _ = get_all_task_status(user_id, date)
-        
-        # Update the message to show completed tasks
-        await show_tasks_for_date(query, context, user_id, date)
-        
-        # Send completion message
-        await query.message.reply_text(
-            f"🎉 روز {date} با موفقیت تکمیل شد!\n"
-            f"✅ همه {total} تسک به عنوان انجام شده علامت‌گذاری شدند.\n"
-            f"📈 پیشرفت: 100%"
-        )
-
-        # Notify other users
-        other_users = [uid for uid in USERS if uid != user_id]
-        for other_user in other_users:
-            try:
-                await context.bot.send_message(
-                    chat_id=other_user,
-                    text=f"🎉 {USERS[user_id]} روز {date} خودش رو با 100% تکمیل کرد!\n"
-                         f"همه {total} تسک انجام شد."
-                )
-            except Exception as e:
-                logger.error(f"Error sending completion notification to {other_user}: {e}")
-                
-    except Exception as e:
-        logger.error(f"Error completing all tasks and day: {e}")
-        await query.edit_message_text("❌ خطا در تکمیل تسک‌ها و روز.")
-
-async def complete_day_only(query, context: ContextTypes.DEFAULT_TYPE, user_id, date):
-    """Complete the day without marking all tasks as done"""
-    try:
-        # Mark the day as completed
-        mark_daily_completed(user_id, date)
-        
-        # Get final statistics
-        total, done_count, _ = get_all_task_status(user_id, date)
-        percentage = int((done_count / total) * 100) if total > 0 else 0
-        
-        # Update the message
-        await show_tasks_for_date(query, context, user_id, date)
-        
-        # Send completion message
-        status_emoji = "🎉" if percentage >= 80 else "👍" if percentage >= 50 else "💪"
-        await query.message.reply_text(
-            f"{status_emoji} روز {date} تکمیل شد!\n"
-            f"📊 تعداد {done_count} از {total} تسک انجام شد ({percentage}%)."
-        )
-
-        # Notify other users
-        other_users = [uid for uid in USERS if uid != user_id]
-        for other_user in other_users:
-            try:
-                await context.bot.send_message(
-                    chat_id=other_user,
-                    text=f"📢 {USERS[user_id]} روز {date} خودش رو تکمیل کرد!\n"
-                         f"تعداد {done_count} از {total} تسک انجام داد ({percentage}%)."
-                )
-            except Exception as e:
-                logger.error(f"Error sending completion notification to {other_user}: {e}")
-                
-    except Exception as e:
-        logger.error(f"Error completing day only: {e}")
-        await query.edit_message_text("❌ خطا در تکمیل روز.")
 
 # Notification functions
 async def notify_task_entry(context: ContextTypes.DEFAULT_TYPE, user_id, date, task_count):
