@@ -11,11 +11,11 @@ services:
       - USER1_NAME=${USER1_NAME}
       - USER2_ID=${USER2_ID}
       - USER2_NAME=${USER2_NAME}
-      - TZ=Asia/Tehran        # 👈 اضافه کردن timezone
+      - TZ=Asia/Tehran
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
-      - /etc/localtime:/etc/localtime:ro   # 👈 سینک کردن ساعت میزبان
+      - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
     networks:
       - telegram-bot-network
