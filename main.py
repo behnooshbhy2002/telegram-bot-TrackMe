@@ -491,7 +491,6 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
 #     await show_tasks_for_date(update, context, user_id, date_str)
 
-import jdatetime
 
 # Show tasks for specific date
 async def date_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
