@@ -275,45 +275,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(welcome_message)
 
-# def parse_date_from_text(text):
-#     """Extract date from text in various formats"""
-#     # Remove /tasks command
-#     text = text.replace("/tasks", "").strip()
-    
-#     # Look for date patterns at the beginning or end
-#     date_patterns = [
-#         r'(\d{4}-\d{1,2}-\d{1,2})',  # YYYY-MM-DD or YYYY-M-D
-#         r'(\d{1,2}/\d{1,2}/\d{4})',  # DD/MM/YYYY or D/M/YYYY
-#         r'(\d{1,2}-\d{1,2}-\d{4})',  # DD-MM-YYYY or D-M-YYYY
-#     ]
-    
-#     for pattern in date_patterns:
-#         match = re.search(pattern, text)
-#         if match:
-#             date_str = match.group(1)
-#             # Convert different formats to YYYY-MM-DD
-#             if '/' in date_str:
-#                 parts = date_str.split('/')
-#                 if len(parts) == 3:
-#                     day, month, year = parts
-#                     date_str = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
-#             elif '-' in date_str and not date_str.startswith('20'):  # DD-MM-YYYY format
-#                 parts = date_str.split('-')
-#                 if len(parts) == 3:
-#                     day, month, year = parts
-#                     date_str = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
-            
-#             # Validate the date
-#             try:
-#                 datetime.strptime(date_str, "%Y-%m-%d")
-#                 # Remove the date from the original text
-#                 remaining_text = re.sub(pattern, '', text).strip()
-#                 return date_str, remaining_text
-#             except ValueError:
-#                 continue
-    
-#     return None, text
-
 def parse_date_from_text(text):
     """Extract date from text in various formats (both Jalali and Gregorian) and convert to Jalali"""
     # Remove /tasks command
@@ -466,31 +427,6 @@ async def today(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     await show_tasks_for_date(update, context, user_id, today)
-
-# # Show tasks for specific date
-# async def date_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-#     user_id = update.message.chat_id
-    
-#     if user_id not in USERS:
-#         await update.message.reply_text("❌ شما مجاز به استفاده از این ربات نیستید.")
-#         return
-    
-#     # Get date from command
-#     args = context.args
-#     if not args:
-#         await update.message.reply_text("❌ لطفاً تاریخ را به فرمت YYYY-MM-DD وارد کنید.\n\nمثال:\n/date 2024-01-15")
-#         return
-    
-#     date_str = args[0]
-#     try:
-#         # Validate date format
-#         datetime.strptime(date_str, "%Y-%m-%d")
-#     except ValueError:
-#         await update.message.reply_text("❌ فرمت تاریخ اشتباه است. لطفاً به فرمت YYYY-MM-DD وارد کنید.\n\nمثال: 2024-01-15")
-#         return
-    
-#     await show_tasks_for_date(update, context, user_id, date_str)
-
 
 # Show tasks for specific date
 async def date_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
