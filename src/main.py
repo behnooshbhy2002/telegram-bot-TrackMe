@@ -1,10 +1,10 @@
 import os
 from telegram.ext import Application
-from src.config import BOT_TOKEN, USERS, logger
-from src.database import init_database
-from src.handlers import setup_handlers
-from src.scheduler import setup_scheduler
-from src.notifications import set_bot_commands
+from .config import BOT_TOKEN, USERS, logger
+from .database import init_database
+from .handlers import setup_handlers
+from .scheduler import setup_scheduler
+from .notifications import set_bot_commands
 
 def main():
     if not BOT_TOKEN:
