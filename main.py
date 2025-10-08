@@ -1,5 +1,5 @@
 from telegram.ext import Application
-from config import BOT_TOKEN, USERS
+from config import BOT_TOKEN, USERS, logger
 from database import init_database
 from handlers import setup_handlers
 from scheduler import setup_scheduler
