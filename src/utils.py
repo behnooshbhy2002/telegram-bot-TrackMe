@@ -1,8 +1,8 @@
 import re
 import jdatetime
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton, Update
-from config import logger
-from database import get_tasks_by_date, get_all_task_status
+from src.config import logger
+from src.database import get_tasks_by_date, get_all_task_status
 
 def parse_date_from_text(text):
     text = text.replace("/tasks", "").strip()

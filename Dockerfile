@@ -29,4 +29,4 @@ RUN mkdir -p /app/data
 EXPOSE 8000
 
 # Run the bot
-CMD ["python", "main.py"]
+CMD ["python", "src/main.py"]

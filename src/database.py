@@ -1,7 +1,7 @@
 import os
 import sqlite3
 import logging
-from config import logger
+from src.config import logger
 
 DB_FILE = "/app/data/tasks.db"
 
