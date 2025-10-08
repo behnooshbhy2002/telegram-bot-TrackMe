@@ -1,3 +1,4 @@
+import os
 from telegram.ext import Application
 from config import BOT_TOKEN, USERS, logger
 from database import init_database
